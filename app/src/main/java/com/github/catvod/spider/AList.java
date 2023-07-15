@@ -90,6 +90,7 @@ public class AList extends Spider {
         List<Item> folders = new ArrayList<>();
         List<Item> files = new ArrayList<>();
         List<Vod> list = new ArrayList<>();
+
         for (Item item : getList(tid, true)) {
             if (item.isFolder()) folders.add(item);
             else files.add(item);
@@ -98,6 +99,7 @@ public class AList extends Spider {
             Sorter.sort(type, order, folders);
             Sorter.sort(type, order, files);
         }
+
         for (Item item : folders) list.add(item.getVod(tid, vodPic));
         for (Item item : files) list.add(item.getVod(tid, vodPic));
         return Result.get().vod(list).page().string();
@@ -113,17 +115,13 @@ public class AList extends Spider {
         Drive drive = getDrive(key);
         List<Item> parents = getList(path, false);
         Sorter.sort("name", "asc", parents);
-        List<String> playUrls = new ArrayList<>();
-        for (Item item : parents) {
-            if (item.isMedia(drive.isNew())) {
-                playUrls.add(item.getName() + "$" + item.getVodId(path) + findSubs(path, parents));
-            }
-        }
         Vod vod = new Vod();
+        vod.setVodPlayFrom(key);
         vod.setVodId(id);
         vod.setVodName(name);
         vod.setVodPic(vodPic);
-        vod.setVodPlayFrom(key);
+        List<String> playUrls = new ArrayList<>();
+        for (Item item : parents) if (item.isMedia(drive.isNew())) playUrls.add(item.getName() + "$" + item.getVodId(path) + findSubs(path, parents));
         vod.setVodPlayUrl(TextUtils.join("#", playUrls));
         return Result.string(vod);
     }

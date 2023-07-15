@@ -23,6 +23,8 @@ public class Result {
     private LinkedHashMap<String, List<Filter>> filters;
     @SerializedName("header")
     private String header;
+    @SerializedName("format")
+    private String format;
     @SerializedName("url")
     private String url;
     @SerializedName("subs")
@@ -32,13 +34,13 @@ public class Result {
     @SerializedName("jx")
     private int jx;
     @SerializedName("page")
-    private int page;
+    private Integer page;
     @SerializedName("pagecount")
-    private int pagecount;
+    private Integer pagecount;
     @SerializedName("limit")
-    private int limit;
+    private Integer limit;
     @SerializedName("total")
-    private int total;
+    private Integer total;
 
     public static Result objectFrom(String str) {
         return new Gson().fromJson(str, Result.class);
@@ -129,8 +131,33 @@ public class Result {
         return this;
     }
 
+    public Result format(String format) {
+        this.format = format;
+        return this;
+    }
+
     public Result subs(List<Sub> subs) {
         this.subs = subs;
+        return this;
+    }
+
+    public Result dash() {
+        this.format = "application/dash+xml";
+        return this;
+    }
+
+    public Result m3u8() {
+        this.format = "application/x-mpegURL";
+        return this;
+    }
+
+    public Result rtsp() {
+        this.format = "application/x-rtsp";
+        return this;
+    }
+
+    public Result octet() {
+        this.format = "application/octet-stream";
         return this;
     }
 
