@@ -30,6 +30,9 @@ import com.github.catvod.utils.Utils;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.File;
 import java.net.URLEncoder;
 import java.util.ArrayList;
@@ -55,7 +58,6 @@ public class Bili extends Spider {
     private JsonObject extend;
     private String cookie;
     private boolean login;
-    private boolean vip;
 
     private Map<String, String> getHeader(String cookie) {
         Map<String, String> headers = new HashMap<>();
@@ -107,6 +109,7 @@ public class Bili extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
+        if (extend.has("json")) return OkHttp.string(extend.get("json").getAsString());
         List<Class> classes = new ArrayList<>();
         LinkedHashMap<String, List<Filter>> filters = new LinkedHashMap<>();
         String[] types = extend.get("type").getAsString().split("#");
@@ -118,15 +121,20 @@ public class Bili extends Spider {
     }
 
     @Override
-    public String homeVideoContent() throws Exception {
-        String[] types = extend.get("type").getAsString().split("#");
-        return categoryContent(types[0], "1", true, new HashMap<>());
+    public String homeVideoContent() {
+        String api = "https://api.bilibili.com/x/web-interface/popular?ps=20";
+        String json = OkHttp.string(api, getGuest());
+        Resp resp = Resp.objectFrom(json);
+        List<Vod> list = new ArrayList<>();
+        for (Resp.Result item : Resp.Result.arrayFrom(resp.getData().getList())) list.add(item.getVod());
+        return Result.string(list);
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         String order = extend.containsKey("order") ? extend.get("order") : "totalrank";
         String duration = extend.containsKey("duration") ? extend.get("duration") : "0";
+        if (extend.containsKey("tid")) tid = tid + " " + extend.get("tid");
         String api = "https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=" + URLEncoder.encode(tid) + "&order=" + order + "&duration=" + duration + "&page=" + pg;
         String json = OkHttp.string(api, getGuest());
         Resp resp = Resp.objectFrom(json);
@@ -139,40 +147,37 @@ public class Bili extends Spider {
     public String detailContent(List<String> ids) throws Exception {
         if (!login) checkLogin();
 
-        String id = ids.get(0);
-        String api = "https://api.bilibili.com/x/web-interface/archive/stat?bvid=" + id;
-        String json = OkHttp.string(api, getMember());
-        Resp resp = Resp.objectFrom(json);
-        String aid = resp.getData().getAid();
+        String[] split = ids.get(0).split("@");
+        String id = split[0];
+        String aid = split[1];
 
-        api = "https://api.bilibili.com/x/web-interface/view?aid=" + aid;
-        json = OkHttp.string(api, getMember());
+        String api = "https://api.bilibili.com/x/web-interface/view?aid=" + aid;
+        String json = OkHttp.string(api, getMember());
         Data detail = Resp.objectFrom(json).getData();
         Vod vod = new Vod();
-        vod.setVodId(id);
+        vod.setVodId(ids.get(0));
         vod.setVodPic(detail.getPic());
         vod.setVodName(detail.getTitle());
         vod.setTypeName(detail.getType());
         vod.setVodContent(detail.getDesc());
         vod.setVodRemarks(detail.getDuration() / 60 + "分鐘");
 
-        api = "https://api.bilibili.com/x/player/playurl?avid=" + aid + "&cid=" + detail.getCid() + "&qn=127&fnval=4048&fourk=1";
-        json = OkHttp.string(api, getMember());
-        Data play = Resp.objectFrom(json).getData();
-        List<String> playList = new ArrayList<>();
-        List<String> playFrom = new ArrayList<>();
-        for (int i = 0; i < play.getAcceptQuality().size(); i++) {
-            int quality = play.getAcceptQuality().get(i);
-            List<String> vodItems = new ArrayList<>();
-            if (!login && quality > 32) continue;
-            if (!vip && quality > 80) continue;
-            for (Page page : detail.getPages()) vodItems.add(page.getPart() + "$" + aid + "+" + page.getCid() + "+" + quality);
-            playList.add(TextUtils.join("#", vodItems));
-            playFrom.add(play.getAcceptDescription().get(i));
-        }
+        LinkedHashMap<String, String> flag = new LinkedHashMap<>();
+        ArrayList<String> episode = new ArrayList<>();
+        for (Page page : detail.getPages()) episode.add(page.getPart() + "$" + aid + "+" + page.getCid());
+        flag.put("B站", TextUtils.join("#", episode));
 
-        vod.setVodPlayFrom(TextUtils.join("$$$", playFrom));
-        vod.setVodPlayUrl(TextUtils.join("$$$", playList));
+        episode = new ArrayList<>();
+        api = "https://api.bilibili.com/x/web-interface/archive/related?bvid=" + id;
+        JSONArray array = new JSONObject(OkHttp.string(api, getMember())).optJSONArray("data");
+        for (int i = 0; i < array.length(); i++) {
+            JSONObject object = array.getJSONObject(i);
+            episode.add(object.getString("title") + "$" + object.optLong("aid") + "+" + object.optLong("cid"));
+        }
+        flag.put("相关推荐", TextUtils.join("#", episode));
+
+        vod.setVodPlayFrom(TextUtils.join("$$$", flag.keySet()));
+        vod.setVodPlayUrl(TextUtils.join("$$$", flag.values()));
         return Result.string(vod);
     }
 
@@ -182,35 +187,50 @@ public class Bili extends Spider {
     }
 
     @Override
+    public String searchContent(String key, boolean quick, String pg) throws Exception {
+        return categoryContent(key, pg, true, new HashMap<>());
+    }
+
+    @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         String[] ids = id.split("\\+");
         String aid = ids[0];
         String cid = ids[1];
-        String qn = ids[2];
+        String qn = "127";
 
         String api = "https://api.bilibili.com/x/player/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + qn + "&fnval=4048&fourk=1";
         String json = OkHttp.string(api, getMember());
         Resp resp = Resp.objectFrom(json);
         Dash dash = resp.getData().getDash();
 
-        StringBuilder videoList = new StringBuilder();
-        StringBuilder audioList = new StringBuilder();
-        for (Media video : dash.getVideo()) {
-            if (video.getId().equals(qn)) {
-                videoList.append(getMedia(video));
-            }
-        }
+        StringBuilder video = new StringBuilder();
+        StringBuilder audio = new StringBuilder();
+        findAudio(dash, audio);
+        findVideo(dash, video, qn);
+        boolean empty = video.length() == 0 && dash.getVideo().size() > 0;
+        if (empty) findVideo(dash, video, dash.getVideo().get(0).getId());
+
+        String mpd = getMpd(dash, video.toString(), audio.toString());
+        String url = "data:application/dash+xml;base64," + Base64.encodeToString(mpd.getBytes(), 0);
+        return Result.get().url(url).dash().header(getMember()).string();
+    }
+
+    private void findAudio(Dash dash, StringBuilder sb) {
         for (Media audio : dash.getAudio()) {
             for (String key : audios.keySet()) {
                 if (audio.getId().equals(key)) {
-                    audioList.append(getMedia(audio));
+                    sb.append(getMedia(audio));
                 }
             }
         }
+    }
 
-        String mpd = getMpd(dash, videoList.toString(), audioList.toString());
-        String url = "data:application/dash+xml;base64," + Base64.encodeToString(mpd.getBytes(), 0);
-        return Result.get().url(url).dash().header(getMember()).string();
+    private void findVideo(Dash dash, StringBuilder sb, String qn) {
+        for (Media video : dash.getVideo()) {
+            if (video.getId().equals(qn)) {
+                sb.append(getMedia(video));
+            }
+        }
     }
 
     private String getMedia(Media media) {
@@ -227,41 +247,16 @@ public class Bili extends Spider {
         String id = media.getId() + "_" + media.getCodecId();
         String type = media.getMimeType().split("/")[0];
         String baseUrl = media.getBaseUrl().replace("&", "&amp;");
-        return String.format(Locale.getDefault(),
-                "<AdaptationSet>\n" +
-                        "<ContentComponent contentType=\"%s\"/>\n" +
-                        "<Representation id=\"%s\" bandwidth=\"%s\" codecs=\"%s\" mimeType=\"%s\" %s startWithSAP=\"%s\">\n" +
-                        "<BaseURL>%s</BaseURL>\n" +
-                        "<SegmentBase indexRange=\"%s\">\n" +
-                        "<Initialization range=\"%s\"/>\n" +
-                        "</SegmentBase>\n" +
-                        "</Representation>\n" +
-                        "</AdaptationSet>",
-                type,
-                id, media.getBandWidth(), media.getCodecs(), media.getMimeType(), params, media.getStartWithSap(),
-                baseUrl,
-                media.getSegmentBase().getIndexRange(),
-                media.getSegmentBase().getInitialization());
+        return String.format(Locale.getDefault(), "<AdaptationSet>\n" + "<ContentComponent contentType=\"%s\"/>\n" + "<Representation id=\"%s\" bandwidth=\"%s\" codecs=\"%s\" mimeType=\"%s\" %s startWithSAP=\"%s\">\n" + "<BaseURL>%s</BaseURL>\n" + "<SegmentBase indexRange=\"%s\">\n" + "<Initialization range=\"%s\"/>\n" + "</SegmentBase>\n" + "</Representation>\n" + "</AdaptationSet>", type, id, media.getBandWidth(), media.getCodecs(), media.getMimeType(), params, media.getStartWithSap(), baseUrl, media.getSegmentBase().getIndexRange(), media.getSegmentBase().getInitialization());
     }
 
     private String getMpd(Dash dash, String videoList, String audioList) {
-        return String.format(Locale.getDefault(),
-                "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"urn:mpeg:dash:schema:mpd:2011\" xsi:schemaLocation=\"urn:mpeg:dash:schema:mpd:2011 DASH-MPD.xsd\" type=\"static\" mediaPresentationDuration=\"PT%sS\" minBufferTime=\"PT%sS\" profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\">\n" +
-                        "<Period duration=\"PT%sS\" start=\"PT0S\">\n" +
-                        "%s\n" +
-                        "%s\n" +
-                        "</Period>\n" +
-                        "</MPD>",
-                dash.getDuration(), dash.getMinBufferTime(),
-                dash.getDuration(),
-                videoList,
-                audioList);
+        return String.format(Locale.getDefault(), "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"urn:mpeg:dash:schema:mpd:2011\" xsi:schemaLocation=\"urn:mpeg:dash:schema:mpd:2011 DASH-MPD.xsd\" type=\"static\" mediaPresentationDuration=\"PT%sS\" minBufferTime=\"PT%sS\" profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\">\n" + "<Period duration=\"PT%sS\" start=\"PT0S\">\n" + "%s\n" + "%s\n" + "</Period>\n" + "</MPD>", dash.getDuration(), dash.getMinBufferTime(), dash.getDuration(), videoList, audioList);
     }
 
     private void checkLogin() {
         String json = OkHttp.string("https://api.bilibili.com/x/web-interface/nav", getMember());
         Data data = Resp.objectFrom(json).getData();
-        vip = data.getVipType() > 0;
         login = data.isLogin();
         getQRCode();
     }

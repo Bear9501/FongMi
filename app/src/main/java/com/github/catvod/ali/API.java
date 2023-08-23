@@ -19,6 +19,7 @@ import com.github.catvod.bean.Sub;
 import com.github.catvod.bean.Vod;
 import com.github.catvod.bean.ali.Code;
 import com.github.catvod.bean.ali.Data;
+import com.github.catvod.bean.ali.Drive;
 import com.github.catvod.bean.ali.Item;
 import com.github.catvod.bean.ali.OAuth;
 import com.github.catvod.bean.ali.User;
@@ -51,15 +52,16 @@ import okhttp3.Response;
 
 public class API {
 
-    private final Map<String, String> quality;
     private ScheduledExecutorService service;
     private final List<String> tempIds;
     private AlertDialog dialog;
     private String refreshToken;
     private String shareToken;
     private String shareId;
+    private String driveId;
     private OAuth oauth;
     private User user;
+    private Drive drive;
 
     private static class Loader {
         static volatile API INSTANCE = new API();
@@ -77,17 +79,15 @@ public class API {
         return FileUtil.getCacheFile("aliyundrive_oauth");
     }
 
+    public File getDriveCache() {
+        return FileUtil.getCacheFile("aliyundrive_drive");
+    }
+
     private API() {
         tempIds = new ArrayList<>();
         oauth = OAuth.objectFrom(FileUtil.read(getOAuthCache()));
         user = User.objectFrom(FileUtil.read(getUserCache()));
-        quality = new HashMap<>();
-        quality.put("4K", "UHD");
-        quality.put("2k", "QHD");
-        quality.put("超清", "FHD");
-        quality.put("高清", "HD");
-        quality.put("標清", "SD");
-        quality.put("流暢", "LD");
+        drive = Drive.objectFrom(FileUtil.read(getDriveCache()));
     }
 
     public void setRefreshToken(String token) {
@@ -105,6 +105,7 @@ public class API {
     public void setShareId(String shareId) {
         if (!getOAuthCache().exists()) oauth.clean().save();
         if (!getUserCache().exists()) user.clean().save();
+        if (!getDriveCache().exists()) drive.clean().save();
         this.shareId = shareId;
         refreshShareToken();
     }
@@ -217,6 +218,20 @@ public class API {
         }
     }
 
+    private boolean getDriveId() {
+        try {
+            SpiderDebug.log("Obtain drive id...");
+            String result = auth("https://user.aliyundrive.com/v2/user/get", "{}", false);
+            drive = Drive.objectFrom(result).save();
+            driveId = drive.getResourceDriveId().isEmpty() ? drive.getDriveId() : drive.getResourceDriveId();
+            return false;
+        } catch (Exception e) {
+            e.printStackTrace();
+            drive.clean().save();
+            return true;
+        }
+    }
+
     private boolean oauthRequest() {
         try {
             SpiderDebug.log("OAuth Request...");
@@ -269,7 +284,8 @@ public class API {
         List<Item> files = new ArrayList<>();
         List<Item> subs = new ArrayList<>();
         listFiles(new Item(getParentFileId(fileId, object)), files, subs);
-        List<String> playFrom = Arrays.asList("原畫", "超清", "高清");
+        Collections.sort(files);
+        List<String> playFrom = Arrays.asList("原畫", "普畫");
         List<String> episode = new ArrayList<>();
         List<String> playUrl = new ArrayList<>();
         for (Item file : files) episode.add(file.getDisplayName() + "$" + file.getFileId() + findSubs(file.getName(), subs));
@@ -358,10 +374,11 @@ public class API {
     public String getDownloadUrl(String fileId) {
         try {
             SpiderDebug.log("getDownloadUrl..." + fileId);
+            if (getDriveId()) throw new Exception("unable obtain drive id");
             tempIds.add(0, copy(fileId));
             JSONObject body = new JSONObject();
             body.put("file_id", tempIds.get(0));
-            body.put("drive_id", user.getDriveId());
+            body.put("drive_id", driveId);
             String json = oauth("openFile/getDownloadUrl", body.toString(), true);
             return new JSONObject(json).getString("url");
         } catch (Exception e) {
@@ -375,10 +392,11 @@ public class API {
     public JSONObject getVideoPreviewPlayInfo(String fileId) {
         try {
             SpiderDebug.log("getVideoPreviewPlayInfo..." + fileId);
+            if (getDriveId()) throw new Exception("unable obtain drive id");
             tempIds.add(0, copy(fileId));
             JSONObject body = new JSONObject();
             body.put("file_id", tempIds.get(0));
-            body.put("drive_id", user.getDriveId());
+            body.put("drive_id", driveId);
             body.put("category", "live_transcoding");
             body.put("url_expire_sec", "14400");
             String json = oauth("openFile/getVideoPreviewPlayInfo", body.toString(), true);
@@ -391,14 +409,15 @@ public class API {
         }
     }
 
-    public String playerContent(String[] ids) {
-        return Result.get().url(getDownloadUrl(ids[0])).octet().subs(getSubs(ids)).header(getHeader()).string();
+    public String playerContent(String[] ids, boolean original) {
+        if (original) return Result.get().url(getDownloadUrl(ids[0])).octet().subs(getSubs(ids)).header(getHeader()).string();
+        else return getPreviewContent(ids);
     }
 
-    public String playerContent(String[] ids, String flag) {
+    private String getPreviewContent(String[] ids) {
         try {
             JSONObject playInfo = getVideoPreviewPlayInfo(ids[0]);
-            String url = getPreviewUrl(playInfo, flag);
+            List<String> url = getPreviewUrl(playInfo);
             List<Sub> subs = getSubs(ids);
             subs.addAll(getSubs(playInfo));
             return Result.get().url(url).m3u8().subs(subs).header(getHeader()).string();
@@ -408,16 +427,17 @@ public class API {
         }
     }
 
-    private String getPreviewUrl(JSONObject playInfo, String flag) throws Exception {
-        if (!playInfo.has("live_transcoding_task_list")) return "";
+    private List<String> getPreviewUrl(JSONObject playInfo) throws Exception {
+        if (!playInfo.has("live_transcoding_task_list")) return Collections.emptyList();
         JSONArray taskList = playInfo.getJSONArray("live_transcoding_task_list");
-        for (int i = 0; i < taskList.length(); ++i) {
+        List<String> url = new ArrayList<>();
+        for (int i = taskList.length() - 1; i >= 0; i--) {
             JSONObject task = taskList.getJSONObject(i);
-            if (task.getString("template_id").equals(quality.get(flag))) {
-                return task.getString("url");
-            }
+            if (!task.optString("status").equals("finished")) continue;
+            url.add(task.optString("template_id"));
+            url.add(task.optString("url"));
         }
-        return taskList.getJSONObject(0).getString("url");
+        return url;
     }
 
     private List<Sub> getSubs(JSONObject playInfo) throws Exception {
@@ -436,7 +456,7 @@ public class API {
     private String copy(String fileId) throws Exception {
         SpiderDebug.log("Copy..." + fileId);
         String json = "{\"requests\":[{\"body\":{\"file_id\":\"%s\",\"share_id\":\"%s\",\"auto_rename\":true,\"to_parent_file_id\":\"root\",\"to_drive_id\":\"%s\"},\"headers\":{\"Content-Type\":\"application/json\"},\"id\":\"0\",\"method\":\"POST\",\"url\":\"/file/copy\"}],\"resource\":\"file\"}";
-        json = String.format(json, fileId, shareId, user.getDriveId());
+        json = String.format(json, fileId, shareId, driveId);
         String result = auth("adrive/v2/batch", json, true);
         if (result.contains("ForbiddenNoPermission.File")) return copy(fileId);
         return new JSONObject(result).getJSONArray("responses").getJSONObject(0).getJSONObject("body").getString("file_id");
@@ -454,7 +474,7 @@ public class API {
         try {
             SpiderDebug.log("Delete..." + fileId);
             String json = "{\"requests\":[{\"body\":{\"drive_id\":\"%s\",\"file_id\":\"%s\"},\"headers\":{\"Content-Type\":\"application/json\"},\"id\":\"%s\",\"method\":\"POST\",\"url\":\"/file/delete\"}],\"resource\":\"file\"}";
-            json = String.format(json, user.getDriveId(), fileId, fileId);
+            json = String.format(json, driveId, fileId, fileId);
             String result = auth("adrive/v2/batch", json, true);
             return result.length() == 211;
         } catch (Exception ignored) {

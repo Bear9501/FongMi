@@ -14,7 +14,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 
 public class Push extends Ali {
 
@@ -25,9 +24,8 @@ public class Push extends Ali {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        String url = ids.get(0).trim();
-        if (url.contains("aliyundrive")) return super.detailContent(ids);
-        return Result.string(vod(url));
+        if (pattern.matcher(ids.get(0)).find()) return super.detailContent(ids);
+        return Result.string(vod(ids.get(0)));
     }
 
     @Override
@@ -65,7 +63,7 @@ public class Push extends Ali {
 
     private void detectSub(String url, String ext, List<Sub> subs) {
         url = Utils.removeExt(url).concat(".").concat(ext);
-        if (OkHttp.string(url).length() > 100) return;
+        if (OkHttp.string(url).length() < 100) return;
         String name = Uri.parse(url).getLastPathSegment();
         subs.add(Sub.create().name(name).ext(ext).url(url));
     }
@@ -73,7 +71,7 @@ public class Push extends Ali {
     private void setFileSub(String url, List<Sub> subs) {
         File file = new File(url.replace("file://", ""));
         if (file.getParentFile() == null) return;
-        for (File f : Objects.requireNonNull(file.getParentFile().listFiles())) {
+        for (File f : file.getParentFile().listFiles()) {
             String ext = Utils.getExt(f.getName());
             if (Utils.isSub(ext)) subs.add(Sub.create().name(Utils.removeExt(f.getName())).ext(ext).url("file://" + f.getAbsolutePath()));
         }

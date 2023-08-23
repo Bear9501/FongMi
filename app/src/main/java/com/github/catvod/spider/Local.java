@@ -19,7 +19,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 
 public class Local extends Spider {
 
@@ -59,7 +58,7 @@ public class Local extends Spider {
         }
         items.addAll(folders);
         items.addAll(media);
-        return Result.string(items);
+        return Result.get().vod(items).page().string();
     }
 
     @Override
@@ -94,7 +93,7 @@ public class Local extends Spider {
         File file = new File(path);
         if (file.getParentFile() == null) return Collections.emptyList();
         List<Sub> subs = new ArrayList<>();
-        for (File f : Objects.requireNonNull(file.getParentFile().listFiles())) {
+        for (File f : file.getParentFile().listFiles()) {
             String ext = Utils.getExt(f.getName());
             if (Utils.isSub(ext)) subs.add(Sub.create().name(Utils.removeExt(f.getName())).ext(ext).url("file://" + f.getAbsolutePath()));
         }
